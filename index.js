@@ -8,6 +8,7 @@ function createRunner(sauceUser, sauceKey) {
   var res = new EE();
   var test = runner(sauceUser, sauceKey);
   res.run = function (config, working) {
+    working = working || function () {};
     var user = config.user;
     var repo = config.repo;
     var tag = config.tag;

@@ -1,44 +1,59 @@
 var runner = require('./lib/run');
 var conf = require('jepso-ci-config');
+var browsers = Object.keys(require('test-platforms'));
+var Q = require('q');
 
 var EE = require('events').EventEmitter;
 
 module.exports = createRunner;
-function createRunner(sauceUser, sauceKey) {
+function createRunner() {
   var res = new EE();
-  var test = runner(sauceUser, sauceKey);
-  res.run = function (config, working) {
+  res.run = function (jobConfig, working) {
     working = working || function () {};
-    var user = config.user;
-    var repo = config.repo;
-    var tag = config.tag;
-    var buildID = config.buildID;
-    var browser = config.browser;
-    return conf.loadRemote(user, repo, tag)
+
+    var commit = jobConfig.commit;
+    var user = commit.user;
+    var repo = commit.repo;
+    var tag = commit.tag;
+
+    var buildID = jobConfig.buildID;
+
+    var start = jobConfig.buildCreationTime || Date.now();
+
+    var fs = jobConfig.fileSystem;
+
+    var testDir = user + '/' + repo + '/' + buildID;
+
+    res.emit('start', user, repo, buildID, {tag: tag, start: start});
+
+    return Q(conf.loadRemote(user, repo, tag))
       .then(function (config) {
-        res.emit('begin', buildID, browser);
-        return test(browser, 'http://jepso-ci.com/api/proxy/' + user + '/' + repo + '/' + tag + config.url,
-            buildID + ': ' + user + '/' + repo + '/' + tag,
-            [],
-          function (result) { //{sessionID: sauceLabsSessionID, passed: true|false, report: object, version: browser.version}
-            res.emit('update', buildID, browser, result.version, {
-              testID: result.sauceLabsSessionID, 
-              result: result.passed ? 'passed' : 'failed', 
-              report: result.report
+        var testURL = 'http://jepso-ci.com/api/proxy/' + user + '/' + repo + '/' + tag + config.url;
+        var testName = buildID + ': ' + user + '/' + repo + '/' + tag;
+
+        return browsers.map(function (browser) {
+          var browserDir = testDir + '/' + browser;
+          return test(browser, url, testName, [],
+            function (version) {
+              res.emit('start-browser', user, repo, buildID, {browser: browser, version: version});
+              return working();
+            },
+            function (version, result) { // result  = {passed, report, sauceTestID}
+              res.emit('finish-browser', user, repo, buildID, {browser: browser, version: version, passed: result.passed});
+              return fs.put(browserDir + '/' + version + '/report.json', JSON.stringify(result.report))
+                .then(function () {
+                  return downloadTestResults(sauceUser, sauceKey, result.sauceTestID, browserDir + '/' + version, fs);
+                })
+                .then(function () {
+                  return working();
+                });
             });
-            working();
-          })
+        });
       })
-      .then(function (result) { //{passed: true|false, failedVersion: string, passedVersion: string}
-        var state;
-        if (result.passed === true) {
-          state = 'passed';
-        } else if (result.passedVersion) {
-          state = passedVersion + '/' + failedVersion;
-        } else {
-          state = 'failed';
-        }
-        res.emit('done', buildID, browser, state);
+      .all()
+      .then(function (browsers) {
+        var end = Date.now();
+        res.emit('finish', user, repo, buildID, {tag: tag, start: start, end: end});
       })
       .fail(function (err) {
         res.emit('error', err);
@@ -48,8 +63,6 @@ function createRunner(sauceUser, sauceKey) {
   return res;
 }
 
-//Emits:
-//  'error'
-//  'begin' => (buildID, browser)
-//  'update' => (buildID, browser, version, {testID, result: 'passed' || 'failed' || 'skipped', report})
-//  'done' => (buildID, browser, state = 'passed' || 'failed' || 'passedVersion / failedVersion' || 'skipped')
+function downloadTestResults(sauceUser, sauceKey, sauceTestID, directory, fs) {
+
+}

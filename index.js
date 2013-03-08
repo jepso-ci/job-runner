@@ -1,68 +1,115 @@
-var runner = require('./lib/run');
 var conf = require('jepso-ci-config');
 var browsers = Object.keys(require('test-platforms'));
 var Q = require('q');
+var runSauce = require('sauce-runner');
+var downloadTestResults = require('./lib/download-test-results');
 
 var EE = require('events').EventEmitter;
 
-module.exports = createRunner;
-function createRunner() {
-  var res = new EE();
-  res.run = function (jobConfig, working) {
-    working = working || function () {};
+exports = module.exports = run;
 
-    var commit = jobConfig.commit;
-    var user = commit.user;
-    var repo = commit.repo;
-    var tag = commit.tag;
+exports.fs = {};
+exports.fs.local = require('./lib/file-systems/local');
+exports.fs.s3 = require('./lib/file-systems/s3');
 
-    var buildID = jobConfig.buildID;
+function run(jobConfig, emit) {
+  emit = emit || function () {};
 
-    var start = jobConfig.buildCreationTime || Date.now();
+  var commit = jobConfig.commit;
+  var user = commit.user;
+  var repo = commit.repo;
+  var tag = commit.tag;
 
-    var fs = jobConfig.fileSystem;
+  var start = jobConfig.buildCreationTime || Date.now();
 
-    var testDir = user + '/' + repo + '/' + buildID;
+  var fs = jobConfig.fileSystem;
 
-    res.emit('start', user, repo, buildID, {tag: tag, start: start});
+  var sauce = jobConfig.sauce;
 
-    return Q(conf.loadRemote(user, repo, tag))
-      .then(function (config) {
-        var testURL = 'http://jepso-ci.com/api/proxy/' + user + '/' + repo + '/' + tag + config.url;
-        var testName = buildID + ': ' + user + '/' + repo + '/' + tag;
+  emit('start', user, repo, {tag: tag, start: start});
 
-        return browsers.map(function (browser) {
-          var browserDir = testDir + '/' + browser;
-          return test(browser, url, testName, [],
-            function (version) {
-              res.emit('start-browser', user, repo, buildID, {browser: browser, version: version});
-              return working();
-            },
-            function (version, result) { // result  = {passed, report, sauceTestID}
-              res.emit('finish-browser', user, repo, buildID, {browser: browser, version: version, passed: result.passed});
-              return fs.put(browserDir + '/' + version + '/report.json', JSON.stringify(result.report))
-                .then(function () {
-                  return downloadTestResults(sauceUser, sauceKey, result.sauceTestID, browserDir + '/' + version, fs);
-                })
-                .then(function () {
-                  return working();
-                });
-            });
-        });
-      })
-      .all()
+  return Q(conf.loadRemote(user, repo, tag))
+    .then(function (config) {
+
+      var result = {user: user, repo: repo, tag: tag, start: start};
+
+      var testURL = 'https://proxy.jepso-ci.com/' + user + '/' + repo + '/' + tag + config.url;
+      var testName = user + '/' + repo + '/' + tag;
+
+      return Q.all(browsers.map(function (browser) {
+        var browserDir = '/' + browser;
+        var results = [];
+        return runSauce(sauce, {
+          browser: browser,
+          url: testURL,
+          name: testName,
+          continueOnFail: config.continueOnFail === true || config.continueOnFailure === true,
+          versions: config.versions ? (config.versions[browser] || []) : null,
+          skip: (config.skip && config.skip[browser]) || null
+        }, {
+          startVersion: function (version) {
+            return emit('start-browser', user, repo, {browser: browser, version: version});
+          },
+          endVersion: function (version, result) {
+            results.push({version: version, passed: result.passed});
+            result.report.passed = result.passed;
+            if (result.sauceUser && result.sauceKey && result.sauceTestID) {
+              result.report.hasDebug = true;
+            } else {
+              result.report.hasDebug = false;
+            }
+            return Q(fs.put(browserDir + '/' + version + '/report.json', JSON.stringify(result.report)))
+              .then(function () {
+                if (!result.report.hasDebug) return null;
+                return downloadTestResults(result.sauceUser, result.sauceKey, result.sauceTestID, browserDir + '/' + version, fs);
+              })
+              .then(function () {
+                return emit('finish-browser', user, repo, {browser: browser, version: version, passed: result.passed});
+              })
+              .fail(function (err) {
+                console.warn(err.stack || err.message || err);
+                throw err;
+              })
+          }
+        })
+        .thenResolve({browser: browser, results: results});
+      }))
       .then(function (browsers) {
-        var end = Date.now();
-        res.emit('finish', user, repo, buildID, {tag: tag, start: start, end: end});
-      })
-      .fail(function (err) {
-        res.emit('error', err);
+        result.end = Date.now();
+        result.browsers = {};
+        browsers.forEach(function (b) {
+          result.browsers[b.browser] = b.results;
+        })
+        return result;
       });
-  };
-
-  return res;
+    })
+    .then(function (result) {
+      return Q(fs.put('/results.json', JSON.stringify(result)))
+        .thenResolve(result);
+    })
+    .then(function (result) {
+      emit('finish', user, repo, {tag: tag, start: start, end: result.end});
+    })
+    .fail(function (err) {
+      emit('error', err);
+    });
 }
 
-function downloadTestResults(sauceUser, sauceKey, sauceTestID, directory, fs) {
 
-}
+var throttle = require('throat')(1);
+run({
+  commit: {user: 'jepso-ci-examples', repo: 'string.js', tag: '88e2169b2f47ab07baff54a94b45eb5df2119791'},
+  fileSystem: exports.fs.local(require('path').join(__dirname, 'output', 'string.js')),
+  sauce: function (fn) {
+    return throttle(function () {
+      return fn('component', 'ACCESS-KEY-HERE')
+    });
+  }
+}, function (name, user, repo, data) {
+  if (name === 'start-browser') {
+    console.warn(user + '/' + repo + ' - ' + data.browser + '@' + data.version);
+  }
+  if (name === 'finish-browser') {
+    console.warn(user + '/' + repo + ' - ' + data.browser + '@' + data.version + ' -> ' + data.passed);
+  }
+})

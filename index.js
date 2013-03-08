@@ -1,16 +1,15 @@
 var conf = require('jepso-ci-config');
 var browsers = Object.keys(require('test-platforms'));
 var Q = require('q');
-var runSauce = require('sauce-runner');
-var downloadTestResults = require('./lib/download-test-results');
-
-var EE = require('events').EventEmitter;
 
 exports = module.exports = run;
 
+exports.runSauce = require('sauce-runner');
+exports.downloadTestResults = require('./lib/download-test-results');
+
+
 exports.fs = {};
 exports.fs.local = require('./lib/file-systems/local');
-exports.fs.s3 = require('./lib/file-systems/s3');
 
 function run(jobConfig, emit) {
   emit = emit || function () {};
@@ -22,7 +21,7 @@ function run(jobConfig, emit) {
 
   var start = jobConfig.buildCreationTime || Date.now();
 
-  var fs = jobConfig.fileSystem;
+  var fs = jobConfig.fileSystem || exports.fs.local(jobConfig.directory);
 
   var sauce = jobConfig.sauce;
 
@@ -39,7 +38,7 @@ function run(jobConfig, emit) {
       return Q.all(browsers.map(function (browser) {
         var browserDir = '/' + browser;
         var results = [];
-        return runSauce(sauce, {
+        return exports.runSauce(sauce, {
           browser: browser,
           url: testURL,
           name: testName,
@@ -61,7 +60,7 @@ function run(jobConfig, emit) {
             return Q(fs.put(browserDir + '/' + version + '/report.json', JSON.stringify(result.report)))
               .then(function () {
                 if (!result.report.hasDebug) return null;
-                return downloadTestResults(result.sauceUser, result.sauceKey, result.sauceTestID, browserDir + '/' + version, fs);
+                return exports.downloadTestResults(result.sauceUser, result.sauceKey, result.sauceTestID, browserDir + '/' + version, fs);
               })
               .then(function () {
                 return emit('finish-browser', user, repo, {browser: browser, version: version, passed: result.passed});
@@ -95,11 +94,11 @@ function run(jobConfig, emit) {
     });
 }
 
-
+/*
 var throttle = require('throat')(1);
 run({
   commit: {user: 'jepso-ci-examples', repo: 'string.js', tag: '88e2169b2f47ab07baff54a94b45eb5df2119791'},
-  fileSystem: exports.fs.local(require('path').join(__dirname, 'output', 'string.js')),
+  fileSystem: require('path').join(__dirname, 'output', 'string.js'),
   sauce: function (fn) {
     return throttle(function () {
       return fn('component', 'ACCESS-KEY-HERE')
@@ -113,3 +112,4 @@ run({
     console.warn(user + '/' + repo + ' - ' + data.browser + '@' + data.version + ' -> ' + data.passed);
   }
 })
+*/

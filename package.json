@@ -1,0 +1,30 @@
+{
+  "name": "jepso-job-runner",
+  "version": "0.0.0",
+  "description": "Run Jobs for Jepso-CI",
+  "main": "index.js",
+  "dependencies": {
+    "get-sauce-results": "~1.0.0",
+    "jepso-ci-config": "~1.0.0",
+    "knox": "~0.5.4",
+    "mkdirp": "~0.3.5",
+    "q": "~0.9.0",
+    "sauce-runner": "~1.0.3",
+    "test-platforms": "~2.0.1"
+  },
+  "devDependencies": {
+    "sinon": "~1.6.0",
+    "throat": "~0.0.0"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jepso-ci/job-runner.git"
+  },
+  "author": "ForbesLindesay",
+  "license": "MIT",
+  "readmeFilename": "README.md",
+  "gitHead": "c34a9c1d63ebc4b37dae90eddc861388532f5edb"
+}
